@@ -72,6 +72,17 @@ impl MemorySet {
             self.areas.remove(idx);
         }
     }
+    /// Unmap every page in a validated virtual address range.
+    pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) {
+        for vpn in VPNRange::new(start_va.floor(), end_va.ceil()) {
+            let area = self
+                .areas
+                .iter_mut()
+                .find(|area| area.data_frames.contains_key(&vpn))
+                .unwrap();
+            area.unmap_one(&mut self.page_table, vpn);
+        }
+    }
     /// Add a new MapArea into this MemorySet.
     /// Assuming that there are no conflicts in the virtual address
     /// space.
