@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -133,6 +134,38 @@ impl TaskManager {
         inner.tasks[cur].change_program_brk(size)
     }
 
+    fn record_syscall(&self, syscall_id: usize) {
+        if syscall_id < 512 {
+            let mut inner = self.inner.exclusive_access();
+            let current = inner.current_task;
+            inner.tasks[current].syscall_counts[syscall_id] += 1;
+        }
+    }
+
+    fn syscall_count(&self, syscall_id: usize) -> Option<usize> {
+        if syscall_id >= 512 {
+            return None;
+        }
+        let inner = self.inner.exclusive_access();
+        Some(inner.tasks[inner.current_task].syscall_counts[syscall_id])
+    }
+
+    fn map_current(&self, start: VirtAddr, end: VirtAddr, permission: MapPermission) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current]
+            .memory_set
+            .insert_framed_area(start, end, permission);
+    }
+
+    fn unmap_current(&self, start: VirtAddr, end: VirtAddr) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current]
+            .memory_set
+            .remove_framed_area(start, end);
+    }
+
     /// Switch current `Running` task to the task we have found,
     /// or there is no `Ready` task and we can exit with all applications completed
     fn run_next_task(&self) {
@@ -201,4 +234,24 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Increment the current task's system call counter.
+pub fn record_syscall(syscall_id: usize) {
+    TASK_MANAGER.record_syscall(syscall_id);
+}
+
+/// Return the current task's count for a system call.
+pub fn syscall_count(syscall_id: usize) -> Option<usize> {
+    TASK_MANAGER.syscall_count(syscall_id)
+}
+
+/// Map a framed area in the current task.
+pub fn map_current(start: VirtAddr, end: VirtAddr, permission: MapPermission) {
+    TASK_MANAGER.map_current(start, end, permission);
+}
+
+/// Unmap a framed area in the current task.
+pub fn unmap_current(start: VirtAddr, end: VirtAddr) {
+    TASK_MANAGER.unmap_current(start, end);
 }

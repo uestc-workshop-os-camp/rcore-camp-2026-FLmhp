@@ -63,6 +63,17 @@ impl MemorySet {
             None,
         );
     }
+    /// Unmap every page in a validated virtual address range.
+    pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) {
+        for vpn in VPNRange::new(start_va.floor(), end_va.ceil()) {
+            let area = self
+                .areas
+                .iter_mut()
+                .find(|area| area.data_frames.contains_key(&vpn))
+                .unwrap();
+            area.unmap_one(&mut self.page_table, vpn);
+        }
+    }
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
         if let Some(data) = data {
