@@ -71,6 +71,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Scheduling priority
+    pub priority: usize,
+
+    /// Accumulated stride
+    pub stride: usize,
 }
 
 impl TaskControlBlockInner {
@@ -135,6 +141,8 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    priority: 16,
+                    stride: 0,
                 })
             },
         };
@@ -165,6 +173,9 @@ impl TaskControlBlock {
         inner.memory_set = memory_set;
         // update trap_cx ppn
         inner.trap_cx_ppn = trap_cx_ppn;
+        inner.base_size = user_sp;
+        inner.heap_bottom = user_sp;
+        inner.program_brk = user_sp;
         // initialize trap_cx
         let trap_cx = TrapContext::app_init_context(
             entry_point,
@@ -216,6 +227,8 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    priority: 16,
+                    stride: 0,
                 })
             },
         });
@@ -229,6 +242,14 @@ impl TaskControlBlock {
         task_control_block
         // **** release child PCB
         // ---- release parent PCB
+    }
+
+    /// Create a child process with a fresh address space and descriptor table.
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        let task = Arc::new(Self::new(elf_data));
+        task.inner_exclusive_access().parent = Some(Arc::downgrade(self));
+        self.inner_exclusive_access().children.push(task.clone());
+        task
     }
 
     /// get pid of process
