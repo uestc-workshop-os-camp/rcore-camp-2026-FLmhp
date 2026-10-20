@@ -1,0 +1,27 @@
+name: Jobs
+
+on: [push]
+
+env:
+  CARGO_TERM_COLOR: always
+  rust_toolchain: nightly
+
+jobs:
+  build-doc:
+    if: github.repository == 'LearningOS/rCore-Tutorial-Code'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build doc
+        run: |
+          git clone https://github.com/uestc-workshop-os-camp/rCore-Tutorial-Test.git user
+          git -C user checkout --detach a0593662ad55d670ba8c27ce1763347cd0dd552f
+          cd os
+          make
+          cargo doc --no-deps --verbose
+      - name: Push to gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./os/target/riscv64gc-unknown-none-elf/doc
+          destination_dir: ${{ github.ref_name }}
