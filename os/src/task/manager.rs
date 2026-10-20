@@ -5,12 +5,15 @@
 
 use super::TaskControlBlock;
 use crate::sync::UPSafeCell;
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use lazy_static::*;
 
+const BIG_STRIDE: usize = usize::MAX / 2;
+
 pub struct TaskManager {
-    ready_queue: VecDeque<Arc<TaskControlBlock>>,
+    ready_queue: Vec<Arc<TaskControlBlock>>,
 }
 
 /// A simple FIFO scheduler.
@@ -18,16 +21,31 @@ impl TaskManager {
     ///Creat an empty TaskManager
     pub fn new() -> Self {
         Self {
-            ready_queue: VecDeque::new(),
+            ready_queue: Vec::new(),
         }
     }
     /// Add process back to ready queue
     pub fn add(&mut self, task: Arc<TaskControlBlock>) {
-        self.ready_queue.push_back(task);
+        self.ready_queue.push(task);
     }
     /// Take a process out of the ready queue
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        if self.ready_queue.is_empty() {
+            return None;
+        }
+        let mut selected = 0;
+        for index in 1..self.ready_queue.len() {
+            let stride = self.ready_queue[index].inner_exclusive_access().stride;
+            let selected_stride = self.ready_queue[selected].inner_exclusive_access().stride;
+            if (stride.wrapping_sub(selected_stride) as isize) < 0 {
+                selected = index;
+            }
+        }
+        let task = self.ready_queue.remove(selected);
+        let mut inner = task.inner_exclusive_access();
+        inner.stride = inner.stride.wrapping_add(BIG_STRIDE / inner.priority);
+        drop(inner);
+        Some(task)
     }
 }
 
@@ -42,7 +60,7 @@ lazy_static! {
 
 /// Add process to ready queue
 pub fn add_task(task: Arc<TaskControlBlock>) {
-	//trace!("kernel: TaskManager::add_task");
+    //trace!("kernel: TaskManager::add_task");
     PID2TCB
         .exclusive_access()
         .insert(task.getpid(), Arc::clone(&task));
@@ -51,7 +69,7 @@ pub fn add_task(task: Arc<TaskControlBlock>) {
 
 /// Take a process out of the ready queue
 pub fn fetch_task() -> Option<Arc<TaskControlBlock>> {
-	//trace!("kernel: TaskManager::fetch_task");
+    //trace!("kernel: TaskManager::fetch_task");
     TASK_MANAGER.exclusive_access().fetch()
 }
 

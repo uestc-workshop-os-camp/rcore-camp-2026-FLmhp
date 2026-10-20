@@ -1,6 +1,8 @@
 //! Types related to task management & Functions for completely changing TCB
 
-use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle, SignalActions, SignalFlags, TaskContext};
+use super::{
+    kstack_alloc, pid_alloc, KernelStack, PidHandle, SignalActions, SignalFlags, TaskContext,
+};
 use crate::{
     config::TRAP_CONTEXT_BASE,
     fs::{File, Stdin, Stdout},
@@ -82,6 +84,12 @@ pub struct TaskControlBlockInner {
     pub frozen: bool,
     pub trap_ctx_backup: Option<TrapContext>,
 
+    /// Scheduling priority
+    pub priority: usize,
+
+    /// Accumulated stride used by the scheduler
+    pub stride: usize,
+
     /// Heap bottom
     pub heap_bottom: usize,
 
@@ -156,6 +164,8 @@ impl TaskControlBlock {
                     killed: false,
                     frozen: false,
                     trap_ctx_backup: None,
+                    priority: 16,
+                    stride: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
                 })
@@ -177,6 +187,7 @@ impl TaskControlBlock {
     pub fn exec(&self, elf_data: &[u8], args: Vec<String>) {
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (memory_set, mut user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let base_size = user_sp;
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
             .unwrap()
@@ -210,6 +221,9 @@ impl TaskControlBlock {
         let mut inner = self.inner_exclusive_access();
         // substitute memory_set
         inner.memory_set = memory_set;
+        inner.base_size = base_size;
+        inner.heap_bottom = base_size;
+        inner.program_brk = base_size;
         // update trap_cx ppn
         inner.trap_cx_ppn = trap_cx_ppn;
         // initialize trap_cx
@@ -271,6 +285,8 @@ impl TaskControlBlock {
                     killed: false,
                     frozen: false,
                     trap_ctx_backup: None,
+                    priority: 16,
+                    stride: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
                 })
@@ -286,6 +302,14 @@ impl TaskControlBlock {
         task_control_block
         // **** release child PCB
         // ---- release parent PCB
+    }
+
+    /// Create a child process directly from an executable image.
+    pub fn spawn(self: &Arc<TaskControlBlock>, elf_data: &[u8]) -> Arc<TaskControlBlock> {
+        let task = Arc::new(TaskControlBlock::new(elf_data));
+        task.inner_exclusive_access().parent = Some(Arc::downgrade(self));
+        self.inner_exclusive_access().children.push(task.clone());
+        task
     }
 
     /// get pid of process

@@ -77,6 +77,22 @@ impl MemorySet {
             self.areas.remove(idx);
         }
     }
+    /// Remove mappings in a page-aligned virtual-address range.
+    pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) {
+        let mut vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        while vpn < end_vpn {
+            if let Some(pte) = self.page_table.translate(vpn) {
+                if pte.is_valid() {
+                    self.page_table.unmap(vpn);
+                }
+            }
+            for area in self.areas.iter_mut() {
+                area.data_frames.remove(&vpn);
+            }
+            vpn.step();
+        }
+    }
     /// Add a new MapArea into this MemorySet.
     /// Assuming that there are no conflicts in the virtual address
     /// space.
