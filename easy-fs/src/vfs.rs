@@ -14,6 +14,8 @@ use spin::{Mutex, MutexGuard};
 
 /// Inode struct in memory
 pub struct Inode {
+    /// Stable inode number.
+    inode_id: u32,
     /// The block id of the inode
     block_id: usize,
     /// The offset of the inode in the block
@@ -29,12 +31,14 @@ impl Inode {
     ///
     /// We should not acquire efs lock here.
     pub fn new(
+        inode_id: u32,
         block_id: u32,
         block_offset: usize,
         fs: Arc<Mutex<EasyFileSystem>>,
         block_device: Arc<dyn BlockDevice>,
     ) -> Self {
         Self {
+            inode_id,
             block_id: block_id as usize,
             block_offset,
             fs,
@@ -77,6 +81,7 @@ impl Inode {
             self.find_inode_id(name, disk_inode).map(|inode_id| {
                 let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
                 Arc::new(Self::new(
+                    inode_id,
                     block_id,
                     block_offset,
                     self.fs.clone(),
@@ -143,12 +148,64 @@ impl Inode {
         block_cache_sync_all();
         // return inode
         Some(Arc::new(Self::new(
+            new_inode_id,
             block_id,
             block_offset,
             self.fs.clone(),
             self.block_device.clone(),
         )))
         // release efs lock automatically by compiler
+    }
+    /// Add a directory entry referring to an existing inode.
+    pub fn create_link(&self, name: &str, inode_id: u32) -> bool {
+        let mut fs = self.fs.lock();
+        if self
+            .read_disk_inode(|root_inode| self.find_inode_id(name, root_inode))
+            .is_some()
+        {
+            return false;
+        }
+        self.modify_disk_inode(|root_inode| {
+            let file_count = root_inode.size as usize / DIRENT_SZ;
+            self.increase_size(((file_count + 1) * DIRENT_SZ) as u32, root_inode, &mut fs);
+            root_inode.write_at(
+                file_count * DIRENT_SZ,
+                DirEntry::new(name, inode_id).as_bytes(),
+                &self.block_device,
+            );
+        });
+        block_cache_sync_all();
+        true
+    }
+    /// Remove a directory entry and return its inode number.
+    pub fn remove_link(&self, name: &str) -> Option<u32> {
+        let _fs = self.fs.lock();
+        let removed = self.modify_disk_inode(|root_inode| {
+            let file_count = root_inode.size as usize / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            for index in 0..file_count {
+                assert_eq!(
+                    root_inode.read_at(
+                        index * DIRENT_SZ,
+                        dirent.as_bytes_mut(),
+                        &self.block_device,
+                    ),
+                    DIRENT_SZ,
+                );
+                if dirent.name() == name {
+                    let inode_id = dirent.inode_id();
+                    root_inode.write_at(
+                        index * DIRENT_SZ,
+                        DirEntry::empty().as_bytes(),
+                        &self.block_device,
+                    );
+                    return Some(inode_id);
+                }
+            }
+            None
+        });
+        block_cache_sync_all();
+        removed
     }
     /// create a directory with 'name' in the root directory
     ///
@@ -164,7 +221,9 @@ impl Inode {
                     disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device,),
                     DIRENT_SZ,
                 );
-                v.push(String::from(dirent.name()));
+                if !dirent.name().is_empty() {
+                    v.push(String::from(dirent.name()));
+                }
             }
             v
         })
@@ -195,6 +254,24 @@ impl Inode {
                 fs.dealloc_data(data_block);
             }
         });
+        block_cache_sync_all();
+    }
+    /// Return the stable inode number.
+    pub fn inode_id(&self) -> u32 {
+        self.inode_id
+    }
+    /// Return the hard-link count.
+    pub fn nlink(&self) -> u32 {
+        self.read_disk_inode(|inode| inode.nlink)
+    }
+    /// Increase the hard-link count.
+    pub fn increase_nlink(&self) {
+        self.modify_disk_inode(DiskInode::increase_nlink);
+        block_cache_sync_all();
+    }
+    /// Decrease the hard-link count.
+    pub fn decrease_nlink(&self) {
+        self.modify_disk_inode(DiskInode::decrease_nlink);
         block_cache_sync_all();
     }
 }

@@ -8,10 +8,12 @@ use crate::sync::UPSafeCell;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 use lazy_static::*;
+
+const BIG_STRIDE: usize = usize::MAX / 2;
 ///A array of `TaskControlBlock` that is thread-safe
 pub struct TaskManager {
     ready_queue: VecDeque<Arc<TaskControlBlock>>,
-    
+
     /// The stopping task, leave a reference so that the kernel stack will not be recycled when switching tasks
     stop_task: Option<Arc<TaskControlBlock>>,
 }
@@ -31,7 +33,22 @@ impl TaskManager {
     }
     /// Take a process out of the ready queue
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        if self.ready_queue.is_empty() {
+            return None;
+        }
+        let mut selected = 0;
+        for index in 1..self.ready_queue.len() {
+            let stride = self.ready_queue[index].inner_exclusive_access().stride;
+            let selected_stride = self.ready_queue[selected].inner_exclusive_access().stride;
+            if (stride.wrapping_sub(selected_stride) as isize) < 0 {
+                selected = index;
+            }
+        }
+        let task = self.ready_queue.remove(selected).unwrap();
+        let mut inner = task.inner_exclusive_access();
+        inner.stride = inner.stride.wrapping_add(BIG_STRIDE / inner.priority);
+        drop(inner);
+        Some(task)
     }
     pub fn remove(&mut self, task: Arc<TaskControlBlock>) {
         if let Some((id, _)) = self
@@ -50,7 +67,6 @@ impl TaskManager {
         // case) so that we can simply replace it;
         self.stop_task = Some(task);
     }
-
 }
 
 lazy_static! {

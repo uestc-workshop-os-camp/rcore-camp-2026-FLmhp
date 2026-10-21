@@ -1,4 +1,4 @@
-use super::File;
+use super::{File, Stat, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -120,6 +120,33 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     }
 }
 
+/// Create a hard link from `new_name` to `old_name`.
+pub fn link_file(old_name: &str, new_name: &str) -> bool {
+    if old_name == new_name || ROOT_INODE.find(new_name).is_some() {
+        return false;
+    }
+    let Some(inode) = ROOT_INODE.find(old_name) else {
+        return false;
+    };
+    if !ROOT_INODE.create_link(new_name, inode.inode_id()) {
+        return false;
+    }
+    inode.increase_nlink();
+    true
+}
+
+/// Remove a hard link by name.
+pub fn unlink_file(name: &str) -> bool {
+    let Some(inode) = ROOT_INODE.find(name) else {
+        return false;
+    };
+    if ROOT_INODE.remove_link(name).is_none() {
+        return false;
+    }
+    inode.decrease_nlink();
+    true
+}
+
 impl File for OSInode {
     /// file readable?
     fn readable(&self) -> bool {
@@ -156,5 +183,13 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn stat(&self) -> Option<Stat> {
+        let inner = self.inner.exclusive_access();
+        Some(Stat::new(
+            inner.inode.inode_id() as u64,
+            StatMode::FILE,
+            inner.inode.nlink(),
+        ))
     }
 }
